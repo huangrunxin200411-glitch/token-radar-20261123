@@ -1,5 +1,10 @@
 // A working token-radar-01 entry (Node 22, standard library only).
 //
+// v1 changes over the starter: the model in lib/model.ts (radar-2) reads its value multiple off the
+// snapshot itself (each category's median market-cap/TVL among live-token protocols) and sets aside
+// wrapped, staked, bridged and CEX protocols, so the board holds 198 genuine pre-token rows; the
+// dashboard states that calibration and recomputes each row's implied value in the page.
+//
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
 // pre-token protocol with the model in lib/model.ts, writes the ranked board to /output/board.json, and
 // copies this repository's dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json,
