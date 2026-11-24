@@ -364,71 +364,364 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
-/** The category's one action, in words a farmer can follow. First match wins. */
-function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const kind = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (kind.includes('lend') || kind.includes('cdp') || kind.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (kind.includes('dex') || kind.includes('yield') || kind.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (kind.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (kind.includes('staking') || kind.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (kind.includes('perpetual') || kind.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (kind.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (kind.includes('curator') || kind.includes('allocator') || kind.includes('risk')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (kind.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (kind.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (kind.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  if (kind.includes('liquid')) return `Deposit $${capital} of the liquid asset into ${name} on ${chain} and keep the receipt.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+/** The farm plan's inputs, gathered once so every category builder reads the same numbers. */
+interface PlanCtx {
+  p: SnapshotProtocol;
+  age: number | null;
+  chain: string;
+  capital: number;
+  hold: number;
+  gas: { perTx: string; weekly: string };
+  listed: string;
+}
+
+/** Step 1 is the same for every plan: a fresh wallet, seed kept offline. */
+function stepWallet(): FarmStep {
+  return {
+    text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
+    cost: 'under $3 of gas for the first transaction',
+    time: '5 minutes',
+  };
+}
+
+/** The last step is the same for every plan: keep a farm log. */
+function stepLog(p: SnapshotProtocol): FarmStep {
+  return {
+    text: `Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.`,
+    cost: 'nothing but the log',
+    time: '5 minutes',
+  };
+}
+
+/** Step 5 is the same shape for every plan: check the protocol's own rewards page weekly. */
+function stepCheck(p: SnapshotProtocol): FarmStep {
+  return {
+    text: `Open ${p.name}'s own points or rewards page once a week and check that your wallet's activity is showing.`,
+    cost: 'no fee to check',
+    time: '5 minutes a week',
+  };
+}
+
+/** Step 6 is the same shape for every plan: claim only from the protocol's own link. */
+function stepClaim(p: SnapshotProtocol): FarmStep {
+  return {
+    text: `Before you withdraw, open ${p.name}'s own points or rewards page and claim only from the link it publishes.`,
+    cost: 'no fee to check, and never pay to claim',
+    time: '10 minutes',
+  };
+}
+
+/**
+ * Risk curators and onchain capital allocators (Steakhouse, Gauntlet, Sentora): they run vaults
+ * that allocate deposits across lending markets, so the farm is a vault deposit, not a trade.
+ */
+function planCurator(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Deposit $${c.capital} of USDC into ${c.p.name}'s vault on ${c.chain}; the curator allocates it across lending markets for you.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Leave the vault alone while the curator moves the funds between markets; do not chase the allocation yourself.`,
+      cost: 'no extra fee to hold',
+      time: 'no weekly action needed',
+    },
+    {
+      text: `Hold the vault shares for at least ${c.hold} days so the position is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays in the vault`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Decentralised exchanges: the farm is liquidity in a pool, earning swap fees while the
+ * position stays in range.
+ */
+function planDex(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Provide $${c.capital} of liquidity to ${c.p.name}'s main pool on ${c.chain}, split evenly between the two tokens of the pair.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Keep the position in range: if the price moves the pool out of range, rebalance it once rather than withdrawing.`,
+      cost: c.gas.weekly,
+      time: '10 minutes a week',
+    },
+    {
+      text: `Hold the liquidity for at least ${c.hold} days so the fees and the activity are counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays in the pool`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Real-world assets: the farm is minting and holding a yield-bearing token (tokenised bills,
+ * credit or property), which accrues its yield while it sits in the wallet.
+ */
+function planRwa(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Mint $${c.capital} of ${c.p.name}'s yield-bearing token on ${c.chain} and hold it in the farm wallet.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Leave the token alone: its yield accrues to the balance, so there is no position to manage and no pool to rebalance.`,
+      cost: 'no extra fee to hold',
+      time: 'no weekly action needed',
+    },
+    {
+      text: `Hold the token for at least ${c.hold} days so the holding is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays in the token`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Lending: the farm is a supply position, optionally with a small borrow against it to show
+ * activity on both sides of the market.
+ */
+function planLending(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Supply $${c.capital} of USDC to ${c.p.name} on ${c.chain} and keep the supply open.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Borrow a small amount, about a quarter of the supply, against it once, then repay it the same week so the market sees both sides.`,
+      cost: c.gas.weekly,
+      time: '10 minutes a week',
+    },
+    {
+      text: `Hold the supply for at least ${c.hold} days so the interest and the activity are counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays supplied`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Yield and yield aggregators: the farm is a deposit into a vault or strategy that compounds
+ * the yield by itself.
+ */
+function planYield(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Deposit $${c.capital} of USDC into ${c.p.name}'s vault on ${c.chain}; the strategy compounds the yield for you.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Leave the vault alone while it compounds; check once a week that the share price is rising and the position is still open.`,
+      cost: c.gas.weekly,
+      time: '5 minutes a week',
+    },
+    {
+      text: `Hold the vault shares for at least ${c.hold} days so the compounding is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays in the vault`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Derivatives and perpetuals: the farm is a margined position, kept small and hedged so the
+ * account stays alive while it accrues volume.
+ */
+function planDerivatives(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Deposit $${c.capital} of USDC as margin on ${c.p.name} on ${c.chain} and open one small position, no more than a tenth of the margin.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Keep the position hedged and the margin above the liquidation line; close and reopen it once a week rather than letting it sit untouched.`,
+      cost: c.gas.weekly,
+      time: '10 minutes a week',
+    },
+    {
+      text: `Keep trading for at least ${c.hold} days so the volume is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays as margin`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * CDPs and stablecoin issuers: the farm is locking collateral and minting the stablecoin,
+ * keeping the ratio healthy.
+ */
+function planCdp(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Lock $${c.capital} of collateral on ${c.chain} and mint ${c.p.name}'s stablecoin against it, keeping the collateral ratio well above the minimum.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Check the collateral ratio once a week and top it up if the collateral's price falls; never let the position near liquidation.`,
+      cost: c.gas.weekly,
+      time: '5 minutes a week',
+    },
+    {
+      text: `Hold the mint open for at least ${c.hold} days so the position is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays locked`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Basis trading: the farm is a delta-neutral position, long the spot asset and short the
+ * perpetual, capturing the funding rate.
+ */
+function planBasis(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Deposit $${c.capital} of USDC into ${c.p.name} on ${c.chain} and open a delta-neutral position: long the spot asset, short the same amount in perps.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '20 minutes to set up',
+    },
+    {
+      text: `Rebalance the hedge once a week so the long and short legs stay equal; the funding rate is the yield, not the price move.`,
+      cost: c.gas.weekly,
+      time: '10 minutes a week',
+    },
+    {
+      text: `Hold the hedge for at least ${c.hold} days so the funding collected is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays in the hedge`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Prediction markets: the farm is a funded position on an outcome; the payout is the yield,
+ * and the position resolves when the event does.
+ */
+function planPrediction(c: PlanCtx): FarmStep[] {
+  return [
+    stepWallet(),
+    {
+      text: `Fund $${c.capital} of USDC into ${c.p.name} on ${c.chain} and place one position on a market that resolves after at least ${c.hold} days.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Hold the position until the market resolves; do not flip it daily, since the farm is the settled position, not the trading volume.`,
+      cost: 'no extra fee to hold',
+      time: 'no weekly action needed',
+    },
+    {
+      text: `Keep the position open for at least ${c.hold} days, or until the market resolves, whichever comes first.`,
+      cost: `the $${c.capital} stays in the market`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/**
+ * Chains, payments and the long tail: the farm is using the network itself, running the
+ * protocol's own action on its chain.
+ */
+function planGeneric(c: PlanCtx): FarmStep[] {
+  const since = c.listed === 'no listing date on record'
+    ? `${c.p.name} has no listing date on record, so the farm is the activity itself`
+    : `${c.p.name} has been live since ${c.listed}`;
+  return [
+    stepWallet(),
+    {
+      text: `Deposit $${c.capital} of USDC into ${c.p.name} on ${c.chain} and keep the position open.`,
+      cost: `$${c.capital} of capital and ${c.gas.perTx}`,
+      time: '15 minutes to set up',
+    },
+    {
+      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote, and keep doing it; ${since}.`,
+      cost: c.gas.weekly,
+      time: '10 minutes a week',
+    },
+    {
+      text: `Hold the position for at least ${c.hold} days so the activity is counted in more than one snapshot.`,
+      cost: `the $${c.capital} stays in the position`,
+      time: `${c.hold} days`,
+    },
+    stepCheck(c.p),
+    stepClaim(c.p),
+    stepLog(c.p),
+  ];
+}
+
+/** Pick the plan builder for a protocol's category; first match wins, generic is the fallback. */
+function planFor(c: PlanCtx): FarmStep[] {
+  const kind = (c.p.category ?? '').toLowerCase();
+  if (kind.includes('curator') || kind.includes('allocator') || kind.includes('risk')) return planCurator(c);
+  if (kind.includes('dex')) return planDex(c);
+  if (kind.includes('rwa')) return planRwa(c);
+  if (kind.includes('lend') || kind.includes('collateral')) return planLending(c);
+  if (kind.includes('yield')) return planYield(c);
+  if (kind.includes('perpetual') || kind.includes('derivative')) return planDerivatives(c);
+  if (kind.includes('cdp') || kind.includes('stable')) return planCdp(c);
+  if (kind.includes('basis')) return planBasis(c);
+  if (kind.includes('prediction')) return planPrediction(c);
+  return planGeneric(c);
 }
 
 /**
  * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan follows
- * from the protocol's own record (category, chains, TVL, age), never from a hand-written list.
+ * from the protocol's own record (category, chains, TVL, age) and from what that category of
+ * protocol actually does: a curator's vault is farmed differently from a DEX pool, a tokenised
+ * bill, a lending supply or a prediction market. No protocol name is special-cased.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = firstChain(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const gas = gasFor(chain);
-  const listed = p.listed_at ? `listed ${p.listed_at}` : 'with no listing date on record';
-  return [
-    {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
-      cost: 'under $3 of gas for the first transaction',
-      time: '5 minutes',
-    },
-    {
-      text: actionFor(p, capital, chain),
-      cost: `$${capital} of capital and ${gas.perTx}`,
-      time: '15 minutes to set up',
-    },
-    {
-      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote, and keep doing it while ${p.name} runs ${listed}.`,
-      cost: gas.weekly,
-      time: '10 minutes a week',
-    },
-    {
-      text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`,
-      cost: `the $${capital} stays in the position`,
-      time: `${hold} days`,
-    },
-    {
-      text: `Open the protocol's own points or rewards page once a week and check that your wallet's activity is showing.`,
-      cost: 'no fee to check',
-      time: '5 minutes a week',
-    },
-    {
-      text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
-      cost: 'no fee to check, and never pay to claim',
-      time: '10 minutes',
-    },
-    {
-      text: `Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.`,
-      cost: 'nothing but the log',
-      time: '5 minutes',
-    },
-  ];
+  const listed = p.listed_at ? p.listed_at : 'no listing date on record';
+  return planFor({ p, age, chain, capital, hold, gas, listed });
 }
 
 /** The live-token protocols, largest market cap first, for the dashboard's live view. */

@@ -71,8 +71,10 @@
     return node;
   }
 
-  // The farm plan is the same derivation the model writes to board.json: category, chains, TVL
-  // and age decide the action, the capital, the hold and every cost and time. No name is special-cased.
+  // The farm plan is the same derivation the model writes to board.json: the category decides
+  // the plan, and the protocol's own chains, TVL and age decide the capital, the hold and
+  // every cost and time. A curator's vault is farmed differently from a DEX pool, a tokenised
+  // bill, a lending supply or a prediction market. No name is special-cased.
   function chainName(p) { return p.chains && p.chains.length > 0 ? p.chains[0] : 'its main chain'; }
 
   function capitalNeeded(p) {
@@ -96,23 +98,6 @@
     return { perTx: 'about $2 of gas', weekly: 'about $2 of gas a week' };
   }
 
-  function planAction(p, capital, chain) {
-    var c = (p.category || '').toLowerCase();
-    var name = p.name;
-    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open.';
-    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
-    if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
-    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
-    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
-    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and place one market position on ' + name + '.';
-    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0 || c.indexOf('risk') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
-    if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
-    if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
-    if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
-    if (c.indexOf('liquid') >= 0) return 'Deposit $' + capital + ' of the liquid asset into ' + name + ' on ' + chain + ' and keep the receipt.';
-    return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
-  }
-
   function planText(step) {
     var s = step.text + ' Cost: ' + step.cost + '. Time: ' + step.time + '.';
     if (s.length > 600) s = s.slice(0, 596) + '...';
@@ -120,21 +105,166 @@
     return s;
   }
 
+  function stepWallet() {
+    return { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' };
+  }
+
+  function stepLog() {
+    return { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' };
+  }
+
+  function stepCheck(p) {
+    return { text: "Open " + p.name + "'s own points or rewards page once a week and check that your wallet's activity is showing.", cost: 'no fee to check', time: '5 minutes a week' };
+  }
+
+  function stepClaim(p) {
+    return { text: "Before you withdraw, open " + p.name + "'s own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' };
+  }
+
+  function planCurator(c) {
+    return [
+      stepWallet(),
+      { text: "Deposit $" + c.capital + " of USDC into " + c.p.name + "'s vault on " + c.chain + "; the curator allocates it across lending markets for you.", cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Leave the vault alone while the curator moves the funds between markets; do not chase the allocation yourself.', cost: 'no extra fee to hold', time: 'no weekly action needed' },
+      { text: 'Hold the vault shares for at least ' + c.hold + ' days so the position is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays in the vault', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planDex(c) {
+    return [
+      stepWallet(),
+      { text: "Provide $" + c.capital + " of liquidity to " + c.p.name + "'s main pool on " + c.chain + ", split evenly between the two tokens of the pair.", cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Keep the position in range: if the price moves the pool out of range, rebalance it once rather than withdrawing.', cost: c.gas.weekly, time: '10 minutes a week' },
+      { text: 'Hold the liquidity for at least ' + c.hold + ' days so the fees and the activity are counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays in the pool', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planRwa(c) {
+    return [
+      stepWallet(),
+      { text: "Mint $" + c.capital + " of " + c.p.name + "'s yield-bearing token on " + c.chain + " and hold it in the farm wallet.", cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Leave the token alone: its yield accrues to the balance, so there is no position to manage and no pool to rebalance.', cost: 'no extra fee to hold', time: 'no weekly action needed' },
+      { text: 'Hold the token for at least ' + c.hold + ' days so the holding is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays in the token', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planLending(c) {
+    return [
+      stepWallet(),
+      { text: 'Supply $' + c.capital + ' of USDC to ' + c.p.name + ' on ' + c.chain + ' and keep the supply open.', cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Borrow a small amount, about a quarter of the supply, against it once, then repay it the same week so the market sees both sides.', cost: c.gas.weekly, time: '10 minutes a week' },
+      { text: 'Hold the supply for at least ' + c.hold + ' days so the interest and the activity are counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays supplied', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planYield(c) {
+    return [
+      stepWallet(),
+      { text: "Deposit $" + c.capital + " of USDC into " + c.p.name + "'s vault on " + c.chain + "; the strategy compounds the yield for you.", cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Leave the vault alone while it compounds; check once a week that the share price is rising and the position is still open.', cost: c.gas.weekly, time: '5 minutes a week' },
+      { text: 'Hold the vault shares for at least ' + c.hold + ' days so the compounding is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays in the vault', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planDerivatives(c) {
+    return [
+      stepWallet(),
+      { text: 'Deposit $' + c.capital + ' of USDC as margin on ' + c.p.name + ' on ' + c.chain + ' and open one small position, no more than a tenth of the margin.', cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Keep the position hedged and the margin above the liquidation line; close and reopen it once a week rather than letting it sit untouched.', cost: c.gas.weekly, time: '10 minutes a week' },
+      { text: 'Keep trading for at least ' + c.hold + ' days so the volume is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays as margin', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planCdp(c) {
+    return [
+      stepWallet(),
+      { text: "Lock $" + c.capital + " of collateral on " + c.chain + " and mint " + c.p.name + "'s stablecoin against it, keeping the collateral ratio well above the minimum.", cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: "Check the collateral ratio once a week and top it up if the collateral's price falls; never let the position near liquidation.", cost: c.gas.weekly, time: '5 minutes a week' },
+      { text: 'Hold the mint open for at least ' + c.hold + ' days so the position is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays locked', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planBasis(c) {
+    return [
+      stepWallet(),
+      { text: 'Deposit $' + c.capital + ' of USDC into ' + c.p.name + ' on ' + c.chain + ' and open a delta-neutral position: long the spot asset, short the same amount in perps.', cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '20 minutes to set up' },
+      { text: 'Rebalance the hedge once a week so the long and short legs stay equal; the funding rate is the yield, not the price move.', cost: c.gas.weekly, time: '10 minutes a week' },
+      { text: 'Hold the hedge for at least ' + c.hold + ' days so the funding collected is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays in the hedge', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planPrediction(c) {
+    return [
+      stepWallet(),
+      { text: 'Fund $' + c.capital + ' of USDC into ' + c.p.name + ' on ' + c.chain + ' and place one position on a market that resolves after at least ' + c.hold + ' days.', cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Hold the position until the market resolves; do not flip it daily, since the farm is the settled position, not the trading volume.', cost: 'no extra fee to hold', time: 'no weekly action needed' },
+      { text: 'Keep the position open for at least ' + c.hold + ' days, or until the market resolves, whichever comes first.', cost: 'the $' + c.capital + ' stays in the market', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planGeneric(c) {
+    var since = c.listed === 'no listing date on record'
+      ? c.p.name + ' has no listing date on record, so the farm is the activity itself'
+      : c.p.name + ' has been live since ' + c.listed;
+    return [
+      stepWallet(),
+      { text: 'Deposit $' + c.capital + ' of USDC into ' + c.p.name + ' on ' + c.chain + ' and keep the position open.', cost: '$' + c.capital + ' of capital and ' + c.gas.perTx, time: '15 minutes to set up' },
+      { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote, and keep doing it; ' + since + '.', cost: c.gas.weekly, time: '10 minutes a week' },
+      { text: 'Hold the position for at least ' + c.hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + c.capital + ' stays in the position', time: c.hold + ' days' },
+      stepCheck(c.p),
+      stepClaim(c.p),
+      stepLog()
+    ];
+  }
+
+  function planFor(c) {
+    var kind = (c.p.category || '').toLowerCase();
+    if (kind.indexOf('curator') >= 0 || kind.indexOf('allocator') >= 0 || kind.indexOf('risk') >= 0) return planCurator(c);
+    if (kind.indexOf('dex') >= 0) return planDex(c);
+    if (kind.indexOf('rwa') >= 0) return planRwa(c);
+    if (kind.indexOf('lend') >= 0 || kind.indexOf('collateral') >= 0) return planLending(c);
+    if (kind.indexOf('yield') >= 0) return planYield(c);
+    if (kind.indexOf('perpetual') >= 0 || kind.indexOf('derivative') >= 0) return planDerivatives(c);
+    if (kind.indexOf('cdp') >= 0 || kind.indexOf('stable') >= 0) return planCdp(c);
+    if (kind.indexOf('basis') >= 0) return planBasis(c);
+    if (kind.indexOf('prediction') >= 0) return planPrediction(c);
+    return planGeneric(c);
+  }
+
   function planSteps(p) {
     var chain = chainName(p);
     var capital = capitalNeeded(p);
     var hold = holdNeeded(p.age_days);
     var gas = gasPrice(chain);
-    var listed = p.listed_at ? 'listed ' + p.listed_at : 'with no listing date on record';
-    return [
-      { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
-      { text: planAction(p, capital, chain), cost: '$' + capital + ' of capital and ' + gas.perTx, time: '15 minutes to set up' },
-      { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote, and keep doing it while ' + p.name + ' runs ' + listed + '.', cost: gas.weekly, time: '10 minutes a week' },
-      { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: "Open the protocol's own points or rewards page once a week and check that your wallet's activity is showing.", cost: 'no fee to check', time: '5 minutes a week' },
-      { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
-    ].map(planText);
+    var listed = p.listed_at ? p.listed_at : 'no listing date on record';
+    return planFor({ p: p, chain: chain, capital: capital, hold: hold, gas: gas, listed: listed }).map(planText);
   }
 
   function hashIn() {
